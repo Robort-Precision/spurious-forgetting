@@ -40,6 +40,12 @@ def parse_args():
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--bf16", action="store_true", default=True)
     p.add_argument("--gradient-checkpointing", action="store_true", default=True)
+    p.add_argument("--lora", action="store_true", help="Use LoRA instead of full fine-tuning")
+    p.add_argument("--lora-r", type=int, default=16, help="LoRA rank")
+    p.add_argument("--lora-alpha", type=int, default=32, help="LoRA alpha")
+    p.add_argument("--lora-dropout", type=float, default=0.05)
+    p.add_argument("--merge-and-save", action="store_true", help="Merge LoRA weights into base model before saving")
+    p.add_argument("--merge-alpha", type=float, default=1.0, help="Scaling factor for LoRA merge (0-1 for partial merge)")
     return p.parse_args()
 
 
@@ -102,6 +108,19 @@ def main():
     if args.gradient_checkpointing:
         model.gradient_checkpointing_enable()
 
+    if args.lora:
+        from peft import LoraConfig, get_peft_model, TaskType
+        lora_config = LoraConfig(
+            r=args.lora_r,
+            lora_alpha=args.lora_alpha,
+            lora_dropout=args.lora_dropout,
+            bias="none",
+            task_type=TaskType.CAUSAL_LM,
+            target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+        )
+        model = get_peft_model(model, lora_config)
+        model.print_trainable_parameters()
+
     print(f"[finetune] Loading dataset: {args.dataset}")
     dataset = load_and_format_dataset(args.dataset, tokenizer, args.max_length)
 
@@ -151,7 +170,17 @@ def main():
     train_result = trainer.train()
 
     # Save final model
-    trainer.save_model(os.path.join(args.output_dir, "final"))
+    if args.lora and args.merge_and_save:
+        print(f"[finetune] Merging LoRA weights (alpha={args.merge_alpha})...")
+        if args.merge_alpha != 1.0:
+            # Scale LoRA weights for partial merge
+            for name, param in model.named_parameters():
+                if "lora_" in name:
+                    param.data *= args.merge_alpha
+        merged = model.merge_and_unload()
+        merged.save_pretrained(os.path.join(args.output_dir, "final"))
+    else:
+        trainer.save_model(os.path.join(args.output_dir, "final"))
     tokenizer.save_pretrained(os.path.join(args.output_dir, "final"))
 
     # Save training metrics

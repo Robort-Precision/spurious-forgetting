@@ -38,6 +38,8 @@ def parse_args():
     p.add_argument("--num-samples", type=int, default=500)
     p.add_argument("--output", type=str, default="results/probing.json")
     p.add_argument("--bf16", action="store_true", default=True)
+    p.add_argument("--sample-indices", type=str, default=None, help="JSON file with list of sample indices to use (for exact reproducibility)")
+    p.add_argument("--save-indices", type=str, default=None, help="Save used sample indices to this JSON file")
     return p.parse_args()
 
 
