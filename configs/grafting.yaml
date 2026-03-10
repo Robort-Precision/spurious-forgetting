@@ -1,0 +1,34 @@
+# Layer Grafting Configurations
+# Replace top-N layers of FT model with base model layers
+
+base_model: "mistralai/Mistral-7B-v0.3"
+ft_model: "results/finetune/checkpoint-605"  # Epoch 1
+task_a: "mmlu"      # Forgotten task
+task_b: "medqa"     # Fine-tuned task
+num_samples: 200
+seed: 42
+
+configs:
+  graft_narrow:
+    description: "Minimal surgical intervention — last 4 layers only"
+    graft_from: 28    # Replace layers 28-31
+    layers_replaced: 4
+    prediction: "η ~0.3-0.4 — may not reach deep enough to fix routing"
+
+  graft_mid:
+    description: "Targeted intervention at forgetting hotspot"
+    graft_from: 24    # Replace layers 24-31
+    layers_replaced: 8
+    prediction: "η ~0.6-0.7 — hits Layer 24 epicenter, best Pareto tradeoff"
+
+  graft_wide:
+    description: "Full routing replacement — all layers above alignment boundary"
+    graft_from: 20    # Replace layers 20-31
+    layers_replaced: 12
+    prediction: "η >0.8 — replaces entire override window identified by logit lens"
+
+# Run command:
+# python scripts/layer_grafting.py --base-model mistralai/Mistral-7B-v0.3 \
+#     --ft-model results/finetune/checkpoint-605 \
+#     --task-a mmlu --task-b medqa --num-samples 200 \
+#     --output results/grafting.json
