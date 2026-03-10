@@ -1,0 +1,66 @@
+# Experiment configuration
+model:
+  name: "meta-llama/Llama-3.2-3B"
+  fallback: "mistralai/Mistral-7B-v0.3"
+  dtype: "bfloat16"
+  max_length: 512
+
+finetune:
+  # Fine-tune on a narrow task to induce "forgetting" on others
+  dataset: "gsm8k"  # math reasoning — should degrade general knowledge
+  epochs: 3
+  batch_size: 4
+  gradient_accumulation: 8
+  learning_rate: 2.0e-5
+  warmup_ratio: 0.1
+  weight_decay: 0.01
+  save_steps: 50
+  eval_steps: 50
+  logging_steps: 10
+  max_steps: 500
+  lora_r: 0  # 0 = full fine-tune (to maximize forgetting signal)
+  output_dir: "./results/finetune"
+
+eval:
+  # Benchmarks to measure before/after fine-tuning
+  tasks:
+    - name: "hellaswag"
+      type: "multiple_choice"
+      metric: "accuracy"
+    - name: "arc_easy"
+      type: "multiple_choice"
+      metric: "accuracy"
+    - name: "arc_challenge"
+      type: "multiple_choice"
+      metric: "accuracy"
+    - name: "mmlu"
+      type: "multiple_choice"
+      metric: "accuracy"
+      subtasks: ["abstract_algebra", "anatomy", "astronomy", "college_biology", "college_chemistry", "college_physics", "computer_security", "high_school_biology", "high_school_chemistry", "high_school_physics", "machine_learning", "world_religions"]
+    - name: "truthfulqa"
+      type: "multiple_choice"
+      metric: "accuracy"
+    - name: "winogrande"
+      type: "multiple_choice"
+      metric: "accuracy"
+  num_samples: 200  # per task, for speed
+  batch_size: 8
+
+probing:
+  # Extract hidden states and train probing classifiers
+  layers: "all"  # or list of layer indices
+  classifier: "logistic_regression"
+  train_split: 0.8
+  num_probing_samples: 500
+  tasks: ["mmlu", "arc_challenge", "hellaswag"]
+
+realignment:
+  strategies:
+    - name: "prompt_recovery"
+      description: "Task-specific prompts that re-activate dormant knowledge"
+    - name: "activation_steering"
+      description: "Add steering vectors to shift activations toward pre-FT directions"
+    - name: "adapter_heads"
+      description: "Small adapter layers trained to realign output head"
+    - name: "activation_patching"
+      description: "Patch specific layer activations from base model during inference"
