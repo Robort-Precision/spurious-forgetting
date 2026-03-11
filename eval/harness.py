@@ -132,9 +132,44 @@ class MMLU(BenchmarkTask):
         "machine_learning", "world_religions",
     ]
 
+    # Category groupings for per-category breakdown
+    CATEGORIES = {
+        "STEM": [
+            "abstract_algebra", "astronomy", "college_biology", "college_chemistry",
+            "college_physics", "computer_security", "high_school_biology",
+            "high_school_chemistry", "high_school_physics", "machine_learning",
+            "college_computer_science", "college_mathematics", "electrical_engineering",
+            "high_school_computer_science", "high_school_mathematics", "high_school_statistics",
+        ],
+        "Humanities": [
+            "formal_logic", "high_school_european_history", "high_school_us_history",
+            "high_school_world_history", "international_law", "jurisprudence",
+            "logical_fallacies", "moral_disputes", "moral_scenarios", "philosophy",
+            "prehistory", "professional_law", "world_religions",
+        ],
+        "Social_Sciences": [
+            "econometrics", "high_school_geography", "high_school_government_and_politics",
+            "high_school_macroeconomics", "high_school_microeconomics", "high_school_psychology",
+            "human_sexuality", "professional_psychology", "public_relations", "security_studies",
+            "sociology", "us_foreign_policy",
+        ],
+        "Other": [
+            "anatomy", "business_ethics", "clinical_knowledge", "college_medicine",
+            "global_facts", "human_aging", "management", "marketing", "medical_genetics",
+            "miscellaneous", "nutrition", "professional_accounting", "professional_medicine",
+            "virology",
+        ],
+    }
+
     def __init__(self, subjects: Optional[list] = None, **kwargs):
         super().__init__(name="mmlu", **kwargs)
         self.subjects = subjects or self.SUBJECTS
+
+    def _get_category(self, subject: str) -> str:
+        for cat, subjs in self.CATEGORIES.items():
+            if subject in subjs:
+                return cat
+        return "Other"
 
     def evaluate(self) -> dict:
         results_by_subject = {}
@@ -165,11 +200,25 @@ class MMLU(BenchmarkTask):
             total_correct += correct
             total_count += len(ds)
 
+        # Per-category aggregation
+        by_category = {}
+        for cat in self.CATEGORIES:
+            cat_correct = sum(results_by_subject.get(s, {}).get("correct", 0) for s in self.CATEGORIES[cat])
+            cat_total = sum(results_by_subject.get(s, {}).get("total", 0) for s in self.CATEGORIES[cat])
+            if cat_total > 0:
+                by_category[cat] = {
+                    "accuracy": cat_correct / cat_total,
+                    "correct": cat_correct,
+                    "total": cat_total,
+                    "subjects_evaluated": [s for s in self.CATEGORIES[cat] if s in results_by_subject],
+                }
+
         return {
             "accuracy": total_correct / total_count if total_count > 0 else 0,
             "correct": total_correct,
             "total": total_count,
             "by_subject": results_by_subject,
+            "by_category": by_category,
         }
 
 
@@ -207,12 +256,78 @@ class Winogrande(BenchmarkTask):
         return {"accuracy": correct / total, "correct": correct, "total": total}
 
 
+class MedQA(BenchmarkTask):
+    def evaluate(self) -> dict:
+        ds = load_dataset("bigbio/med_qa", "med_qa_en_4options_source", split="test", trust_remote_code=True)
+        ds = ds.shuffle(seed=42).select(range(min(self.num_samples, len(ds))))
+
+        correct = 0
+        total = 0
+        for ex in tqdm(ds, desc="MedQA"):
+            question = ex.get("question", ex.get("QUESTION", ""))
+            options = ex.get("options", {})
+            answer_idx = ex.get("answer_idx", ex.get("ANSWER", ""))
+
+            if isinstance(options, dict):
+                choice_keys = sorted(options.keys())
+                choices = [options[k] for k in choice_keys]
+                prompt = f"Question: {question}\n" + "\n".join(
+                    f"{k}) {options[k]}" for k in choice_keys
+                ) + "\nAnswer:"
+                label = choice_keys.index(answer_idx) if answer_idx in choice_keys else 0
+            else:
+                choices = list(options) if options else ["A", "B", "C", "D"]
+                prompt = f"Question: {question}\nAnswer:"
+                label = 0
+
+            pred = self.score_choices(prompt, [f" {c}" for c in ["A", "B", "C", "D"][:len(choices)]])
+            if pred == label:
+                correct += 1
+            total += 1
+
+        return {"accuracy": correct / total if total > 0 else 0, "correct": correct, "total": total}
+
+
+class TriviaQA(BenchmarkTask):
+    def evaluate(self) -> dict:
+        ds = load_dataset("trivia_qa", "rc.nocontext", split="validation", trust_remote_code=True)
+        ds = ds.shuffle(seed=42).select(range(min(self.num_samples, len(ds))))
+
+        correct = 0
+        total = 0
+        for ex in tqdm(ds, desc="TriviaQA"):
+            question = ex["question"]
+            answers = ex["answer"]["aliases"] + [ex["answer"]["value"]]
+            answers_lower = [a.lower().strip() for a in answers]
+
+            prompt = f"Question: {question}\nAnswer:"
+            inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512)
+            inputs = {k: v.to(self.device) for k, v in inputs.items()}
+
+            with torch.no_grad():
+                output_ids = self.model.generate(
+                    **inputs, max_new_tokens=32, do_sample=False,
+                    pad_token_id=self.tokenizer.pad_token_id
+                )
+
+            generated = self.tokenizer.decode(output_ids[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
+            generated_clean = generated.strip().lower().split("\n")[0]
+
+            if any(ans in generated_clean or generated_clean in ans for ans in answers_lower if ans):
+                correct += 1
+            total += 1
+
+        return {"accuracy": correct / total if total > 0 else 0, "correct": correct, "total": total}
+
+
 TASK_REGISTRY = {
     "hellaswag": HellaSwag,
     "arc_easy": lambda **kw: ARC(difficulty="easy", **kw),
     "arc_challenge": lambda **kw: ARC(difficulty="challenge", **kw),
     "mmlu": MMLU,
     "winogrande": Winogrande,
+    "medqa": MedQA,
+    "triviaqa": TriviaQA,
 }
 
 
